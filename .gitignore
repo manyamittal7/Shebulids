@@ -1,0 +1,7 @@
+model/
+ner_model/
+results/
+__pycache__/
+*.csv
+*.tsv
+*.xlsx

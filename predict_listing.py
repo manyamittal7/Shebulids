@@ -11,7 +11,7 @@ model_path = "./model"
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForTokenClassification.from_pretrained(model_path)
 
-device = torch.device("cpu")
+device = torch.device("cpu")  # change to "cuda" if GPU available
 model.to(device)
 model.eval()
 
@@ -19,96 +19,105 @@ model.eval()
 # Load Data
 # -------------------------
 df = pd.read_csv("train.tsv", sep="\t")
+df = df.apply(lambda x: x.astype(str).str.strip())
 
+# Select 5001–12000
+df = df[(df["Record Number"].astype(int) >= 5001) &
+        (df["Record Number"].astype(int) <= 12000)].copy()
+
+print("Total records selected:", len(df))
+
+# -------------------------
+# Prediction Function
+# -------------------------
+def predict_sentence(text):
+
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True
+    )
+
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    predictions = torch.argmax(outputs.logits, dim=2)
+
+    tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
+    predicted_tags = [model.config.id2label[p.item()] for p in predictions[0]]
+
+    return tokens, predicted_tags
+
+# -------------------------
+# Extract Aspects (FIXED WORD JOINING)
+# -------------------------
 results = []
 
-current_record = None
-current_category = None
-current_tag = None
-current_value = ""
-
-# -------------------------
-# Process Tokens
-# -------------------------
 for _, row in tqdm(df.iterrows(), total=len(df)):
 
     record = row["Record Number"]
     category = row["Category"]
-    token = str(row["Token"])
-    tag = str(row["Tag"])
+    title = row["Title"]
 
-    # New record detected
-    if current_record is not None and record != current_record:
-        if current_tag is not None:
-            results.append([
-                current_record,
-                current_category,
-                current_tag,
-                current_value.strip()
-            ])
-        current_tag = None
-        current_value = ""
+    tokens, tags = predict_sentence(title)
 
-    # If token has a valid tag
-    if tag != "O" and tag != "nan":
-        if current_tag == tag:
-            current_value += " " + token
+    current_tag = None
+    current_value = ""
+
+    for token, tag in zip(tokens, tags):
+
+        # Skip special tokens
+        if token in ["[CLS]", "[SEP]", "[PAD]"]:
+            continue
+
+        # Handle subword tokens properly
+        if token.startswith("##"):
+            current_value += token[2:]
+            continue
+
+        if tag != "O":
+            if current_tag == tag:
+                current_value += " " + token
+            else:
+                if current_tag is not None:
+                    results.append([
+                        record,
+                        category,
+                        current_tag,
+                        current_value.strip()
+                    ])
+                current_tag = tag
+                current_value = token
         else:
             if current_tag is not None:
                 results.append([
-                    current_record,
-                    current_category,
+                    record,
+                    category,
                     current_tag,
                     current_value.strip()
                 ])
-            current_tag = tag
-            current_value = token
-    else:
-        if current_tag is not None:
-            results.append([
-                current_record,
-                current_category,
-                current_tag,
-                current_value.strip()
-            ])
-            current_tag = None
-            current_value = ""
+                current_tag = None
+                current_value = ""
 
-    current_record = record
-    current_category = category
-
-# Save last value
-if current_tag is not None:
-    results.append([
-        current_record,
-        current_category,
-        current_tag,
-        current_value.strip()
-    ])
+    # Save last pending tag
+    if current_tag is not None:
+        results.append([
+            record,
+            category,
+            current_tag,
+            current_value.strip()
+        ])
 
 # -------------------------
-# Create DataFrame
+# Create Final Output
 # -------------------------
 submission = pd.DataFrame(
     results,
-    columns=[
-        "Record Number",
-        "Category",
-        "Aspect Name",
-        "Aspect Value"
-    ]
+    columns=["Record Number", "Category", "Aspect Name", "Aspect Value"]
 )
 
-# -------------------------
-# Console Preview (Aligned)
-# -------------------------
-print("\n================ FINAL OUTPUT PREVIEW ================\n")
-print(submission.head(20).to_string(index=False))
-print("\n======================================================\n")
+submission.to_csv("final_output_subset.csv", index=False, encoding="utf-8")
 
-# -------------------------
-# Save File (CSV Recommended)
-# -------------------------
-submission.to_csv("final_output.csv", index=False)
-
-print("✅ DONE — final_output.csv created successfully!")
+print("✅ DONE — final_output_subset.csv created successfully!")

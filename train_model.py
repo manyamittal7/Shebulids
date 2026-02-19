@@ -15,22 +15,22 @@ print("Using device:", "cuda" if torch.cuda.is_available() else "cpu")
 # ==============================
 print("Loading train_clean.tsv...")
 
-df = pd.read_csv("train_clean.tsv", sep="\t")
-# Fix Token column (important)
-df["Token"] = df["Token"].fillna("").astype(str)
+df_full = pd.read_csv("train_clean.tsv", sep="\t")
+
+# Fix Token column
+df_full["Token"] = df_full["Token"].fillna("").astype(str)
 
 # Fix Tag column
+df_full["Tag"] = df_full["Tag"].fillna("O").astype(str)
 
+# -----------------------------
+# SUBSET: 5001-12000
+# -----------------------------
+df = df_full[(df_full["Record Number"].astype(int) >= 5001) &
+             (df_full["Record Number"].astype(int) <= 12000)].copy()
 
-
-df["Tag"] = df["Tag"].fillna("O").astype(str)
-
-
-# Ensure no missing tags
-df["Tag"] = df["Tag"].fillna("O")
-
-print("Total rows:", len(df))
-print("Unique Records:", df["Record Number"].nunique())
+print("Total rows in subset:", len(df))
+print("Unique Records in subset:", df["Record Number"].nunique())
 
 # ==============================
 # 2. GROUP INTO SENTENCES
@@ -100,6 +100,9 @@ def tokenize_and_align_labels(examples):
 
 tokenized_dataset = dataset.map(tokenize_and_align_labels, batched=True)
 
+# Shuffle dataset for training
+tokenized_dataset = tokenized_dataset.shuffle(seed=42)
+
 # ==============================
 # 6. LOAD MODEL
 # ==============================
@@ -114,7 +117,7 @@ model = AutoModelForTokenClassification.from_pretrained(
 # 7. TRAINING ARGUMENTS
 # ==============================
 training_args = TrainingArguments(
-    output_dir="./results",
+    output_dir="./results_5001_12000",
     learning_rate=2e-5,
     per_device_train_batch_size=8,
     num_train_epochs=3,
@@ -133,18 +136,18 @@ trainer = Trainer(
     train_dataset=tokenized_dataset
 )
 
-
 # ==============================
 # 9. TRAIN
 # ==============================
-print("Starting training...")
+print("Starting training on subset 5001-12000...")
 trainer.train()
 
 # ==============================
 # 10. SAVE MODEL
 # ==============================
-print("Saving model...")
-trainer.save_model("./model")
-tokenizer.save_pretrained("./model")
+save_path = "./model_5001_12000"
+print(f"Saving model to {save_path}...")
+trainer.save_model(save_path)
+tokenizer.save_pretrained(save_path)
 
-print("Training Complete ✅ Model saved in ./model")
+print("✅ Training Complete — Model saved in", save_path)
